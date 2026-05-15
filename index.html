@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="theme-color" content="#0F6E56"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>GPS Campo - Georeferenciación</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.svg"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  :root{
+    --verde:#0F6E56;--verde-claro:#1D9E75;--verde-bg:#E1F5EE;
+    --rojo:#A32D2D;--rojo-bg:#FCEBEB;
+    --ambar:#854F0B;--ambar-bg:#FAEEDA;
+    --gris:#444441;--gris-bg:#F1EFE8;
+    --borde:#d3d1c7;--radio:10px;
+    --fuente:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }
+  body{font-family:var(--fuente);background:#f5f4f0;color:#2c2c2a;height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
+
+  /* HEADER */
+  header{background:var(--verde);color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:1000;}
+  header h1{font-size:15px;font-weight:600;letter-spacing:.3px;}
+  #estado-sync{font-size:11px;padding:3px 8px;border-radius:20px;background:rgba(255,255,255,0.2);}
+  #estado-sync.online{background:rgba(255,255,255,0.25);}
+  #estado-sync.offline{background:rgba(200,80,80,0.4);}
+
+  /* MAPA */
+  #mapa{flex:1;min-height:0;z-index:1;}
+
+  /* PANEL INFERIOR */
+  #panel{background:#fff;border-top:1px solid var(--borde);flex-shrink:0;max-height:55dvh;overflow-y:auto;}
+  
+  /* TABS */
+  .tabs{display:flex;border-bottom:1px solid var(--borde);}
+  .tab{flex:1;padding:10px 4px;font-size:12px;font-weight:500;text-align:center;cursor:pointer;color:#888;border:none;background:none;transition:color .2s;}
+  .tab.activo{color:var(--verde);border-bottom:2px solid var(--verde);}
+
+  /* CONTENIDO TABS */
+  .tab-content{display:none;padding:12px;}
+  .tab-content.activo{display:block;}
+
+  /* ALERTA FUERA DE ÁREA */
+  #alerta-area{background:var(--rojo-bg);color:var(--rojo);border:1px solid #f09595;border-radius:var(--radio);padding:10px 12px;font-size:13px;font-weight:500;margin-bottom:10px;display:none;}
+  #alerta-area.visible{display:block;}
+
+  /* GPS INFO */
+  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}
+  .info-card{background:var(--gris-bg);border-radius:8px;padding:8px 10px;}
+  .info-label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;}
+  .info-val{font-size:15px;font-weight:600;color:#2c2c2a;}
+  .info-val.buena{color:var(--verde);}
+  .info-val.mala{color:var(--rojo);}
+
+  /* BOTONES DE ACCIÓN */
+  .btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+  button{border:none;border-radius:var(--radio);padding:11px 8px;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s;}
+  button:active{transform:scale(0.97);opacity:.85;}
+  .btn-primario{background:var(--verde);color:#fff;}
+  .btn-peligro{background:var(--rojo);color:#fff;}
+  .btn-secundario{background:var(--gris-bg);color:var(--gris);}
+  .btn-ambar{background:var(--ambar-bg);color:var(--ambar);}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+
+  /* TRACK CONFIG */
+  .track-config{background:var(--verde-bg);border-radius:var(--radio);padding:10px 12px;margin-bottom:10px;}
+  .track-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+  .track-row:last-child{margin-bottom:0;}
+  .track-row label{font-size:12px;color:var(--verde);flex:1;}
+  .track-row select,.track-row input[type=number]{font-size:12px;padding:4px 6px;border:1px solid var(--borde);border-radius:6px;background:#fff;width:80px;}
+  #btn-track{width:100%;}
+  #btn-track.grabando{background:var(--rojo);}
+
+  /* LISTA VÉRTICES */
+  #lista-vertices{max-height:160px;overflow-y:auto;}
+  .vertice-item{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--gris-bg);font-size:12px;}
+  .vertice-num{background:var(--verde);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
+  .vertice-coords{flex:1;color:#555;font-family:monospace;font-size:11px;}
+  .vertice-prec{font-size:10px;color:#aaa;}
+  .btn-del{background:none;padding:4px;color:#ccc;font-size:16px;line-height:1;}
+
+  /* PREDIO INFO */
+  .campo{margin-bottom:10px;}
+  .campo label{display:block;font-size:12px;color:#888;margin-bottom:4px;}
+  .campo input,.campo select,.campo textarea{width:100%;padding:8px 10px;border:1px solid var(--borde);border-radius:8px;font-size:13px;font-family:var(--fuente);background:#fff;}
+  .campo textarea{height:60px;resize:none;}
+
+  /* SYNC */
+  .sync-card{background:var(--gris-bg);border-radius:var(--radio);padding:10px 12px;margin-bottom:8px;font-size:12px;}
+  .sync-card h4{font-size:13px;margin-bottom:4px;}
+  .sync-stat{color:#888;margin-bottom:8px;}
+  #btn-sync{width:100%;margin-bottom:8px;}
+  #log-sync{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:8px;font-size:11px;color:#555;font-family:monospace;max-height:100px;overflow-y:auto;white-space:pre-wrap;}
+
+  /* TOGGLE SWITCH */
+  .toggle-wrap{display:flex;align-items:center;gap:8px;font-size:12px;color:#888;}
+  .toggle{position:relative;width:36px;height:20px;flex-shrink:0;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .toggle-slider{position:absolute;inset:0;background:#d3d1c7;border-radius:20px;transition:.3s;}
+  .toggle-slider:before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.3s;}
+  .toggle input:checked+.toggle-slider{background:var(--verde);}
+  .toggle input:checked+.toggle-slider:before{transform:translateX(16px);}
+
+  /* TOAST */
+  #toast{position:absolute;bottom:calc(55dvh + 12px);left:50%;transform:translateX(-50%);background:#2c2c2a;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999;white-space:nowrap;}
+  #toast.show{opacity:1;}
+
+  /* Marcador GPS actual */
+  .mi-posicion{width:16px;height:16px;border-radius:50%;background:#1D9E75;border:3px solid #fff;box-shadow:0 0 0 3px rgba(29,158,117,0.3);}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GPS Campo — Predios</h1>
+  <span id="estado-sync" class="offline">Sin conexión</span>
+</header>
+
+<div id="mapa"></div>
+<div id="alerta-area">Fuera del área acreditada</div>
+<div id="toast"></div>
+
+<div id="panel">
+  <div class="tabs">
+    <button class="tab activo" onclick="cambiarTab('gps')">GPS</button>
+    <button class="tab" onclick="cambiarTab('track')">Track</button>
+    <button class="tab" onclick="cambiarTab('predio')">Predio</button>
+    <button class="tab" onclick="cambiarTab('sync')">Nube</button>
+  </div>
+
+  <!-- TAB GPS -->
+  <div id="tab-gps" class="tab-content activo">
+    <div class="info-grid">
+      <div class="info-card">
+        <div class="info-label">Latitud</div>
+        <div class="info-val" id="val-lat">--</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">Longitud</div>
+        <div class="info-val" id="val-lng">--</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">Precisión</div>
+        <div class="info-val" id="val-prec">--</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">Altitud</div>
+        <div class="info-val" id="val-alt">--</div>
+      </div>
+    </div>
+    <div class="btn-grid">
+      <button class="btn-primario" onclick="marcarVertice()" id="btn-vertice" disabled>Marcar vértice</button>
+      <button class="btn-ambar" onclick="cerrarPoligono()" id="btn-cerrar" disabled>Cerrar predio</button>
+    </div>
+    <div id="lista-vertices"></div>
+  </div>
+
+  <!-- TAB TRACK -->
+  <div id="tab-track" class="tab-content">
+    <div class="track-config">
+      <div class="track-row">
+        <label>Modo de track</label>
+        <select id="modo-track">
+          <option value="tiempo">Por tiempo</option>
+          <option value="distancia">Por distancia</option>
+        </select>
+      </div>
+      <div class="track-row">
+        <label id="lbl-intervalo">Intervalo (seg)</label>
+        <input type="number" id="val-intervalo" value="5" min="2" max="60"/>
+      </div>
+    </div>
+    <button class="btn-primario" id="btn-track" onclick="toggleTrack()">Iniciar track</button>
+    <div style="margin-top:10px;font-size:12px;color:#888;text-align:center;" id="info-track">Track detenido</div>
+  </div>
+
+  <!-- TAB PREDIO -->
+  <div id="tab-predio" class="tab-content">
+    <div class="campo">
+      <label>Nombre del predio</label>
+      <input type="text" id="inp-nombre" placeholder="Ej: Predio El Pino 01"/>
+    </div>
+    <div class="campo">
+      <label>Propietario</label>
+      <input type="text" id="inp-propietario" placeholder="Nombre del propietario"/>
+    </div>
+    <div class="campo">
+      <label>Técnico</label>
+      <input type="text" id="inp-tecnico" placeholder="Tu nombre"/>
+    </div>
+    <div class="campo">
+      <label>Observaciones</label>
+      <textarea id="inp-obs" placeholder="Notas adicionales..."></textarea>
+    </div>
+    <div class="btn-grid">
+      <button class="btn-primario" onclick="guardarPredio()">Guardar predio</button>
+      <button class="btn-secundario" onclick="nuevoPredio()">Nuevo</button>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--verde);text-align:center;" id="info-area-ha"></div>
+  </div>
+
+  <!-- TAB SYNC / NUBE -->
+  <div id="tab-sync" class="tab-content">
+    <div class="sync-card">
+      <h4>Estado de sincronización</h4>
+      <div class="sync-stat" id="stat-pendientes">Cargando...</div>
+      <div class="toggle-wrap">
+        <label class="toggle">
+          <input type="checkbox" id="toggle-autosync" onchange="toggleAutosync(this.checked)"/>
+          <span class="toggle-slider"></span>
+        </label>
+        Sincronización automática al detectar señal
+      </div>
+    </div>
+    <button class="btn-primario" id="btn-sync" onclick="sincronizar()">Subir a Supabase ahora</button>
+    <div id="log-sync">Esperando conexión...</div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONFIGURACIÓN SUPABASE — reemplazar con tus credenciales
+// ============================================================
+const SUPABASE_URL = 'https://lwadzjltomjdrawnujhh.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_2febF3KcU9iZohHw2NaywQ_4NkBX5JA';
+const PROYECTO_ID  = '5bcf5e0e-f2e9-47b2-8fc1-361242e5eb0f';  // de la tabla proyectos
+
+// ============================================================
+// ESTADO GLOBAL
+// ============================================================
+const estado = {
+  pos: null,          // posición GPS actual
+  vertices: [],       // vértices del predio actual
+  tracks: [],         // puntos del track actual
+  trackActivo: false,
+  trackTimer: null,
+  trackUltPos: null,
+  predioActual: null,
+  areaAcreditada: null, // GeoJSON del polígono del área
+  online: false,
+  autosync: false
+};
+
+// ============================================================
+// MAPA LEAFLET
+// ============================================================
+const mapa = L.map('mapa', {zoomControl:false, attributionControl:false});
+L.control.zoom({position:'topright'}).addTo(mapa);
+
+// Tiles OpenStreetMap (funciona con internet; para offline usar tiles locales)
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 20,
+  maxNativeZoom: 19
+}).addTo(mapa);
+
+mapa.setView([-7.15, -78.51], 13); // centro en Cajamarca
+
+const iconoPosicion = L.divIcon({className:'mi-posicion',iconSize:[16,16],iconAnchor:[8,8]});
+let marcadorPos = null;
+let poligonoLayer = null;
+let trackLayer = L.polyline([], {color:'#1D9E75',weight:3,opacity:.7}).addTo(mapa);
+let areaLayer = null;
+
+// ============================================================
+// GEOLOCALIZACIÓN CONTINUA
+// ============================================================
+const watchId = navigator.geolocation.watchPosition(
+  (pos) => {
+    estado.pos = pos;
+    const {latitude:lat, longitude:lng, accuracy, altitude} = pos.coords;
+
+    // Actualizar UI
+    document.getElementById('val-lat').textContent  = lat.toFixed(7);
+    document.getElementById('val-lng').textContent  = lng.toFixed(7);
+    document.getElementById('val-prec').textContent = accuracy ? accuracy.toFixed(1)+' m' : '--';
+    document.getElementById('val-alt').textContent  = altitude ? altitude.toFixed(1)+' m' : '--';
+
+    const precEl = document.getElementById('val-prec');
+    precEl.className = 'info-val ' + (accuracy < 5 ? 'buena' : accuracy < 15 ? '' : 'mala');
+
+    document.getElementById('btn-vertice').disabled = false;
+    document.getElementById('btn-cerrar').disabled = estado.vertices.length < 3;
+
+    // Marcador en mapa
+    if(!marcadorPos) marcadorPos = L.marker([lat,lng],{icon:iconoPosicion}).addTo(mapa);
+    else marcadorPos.setLatLng([lat,lng]);
+    mapa.setView([lat,lng]);
+
+    // Validar si está dentro del área acreditada
+    validarDentroDeArea(lat, lng);
+
+    // Track automático por distancia
+    if(estado.trackActivo && document.getElementById('modo-track').value === 'distancia'){
+      const dist = estado.trackUltPos ? calcDistancia(estado.trackUltPos, {lat,lng}) : 999;
+      const min  = parseFloat(document.getElementById('val-intervalo').value);
+      if(dist >= min) registrarPuntoTrack(lat, lng, accuracy, altitude);
+    }
+  },
+  (err) => { toast('Error GPS: ' + err.message); },
+  {enableHighAccuracy:true, maximumAge:2000, timeout:15000}
+);
+
+// ============================================================
+// TRACK
+// ============================================================
+function toggleTrack(){
+  estado.trackActivo = !estado.trackActivo;
+  const btn = document.getElementById('btn-track');
+  const info = document.getElementById('info-track');
+  if(estado.trackActivo){
+    btn.textContent = 'Detener track';
+    btn.classList.add('grabando');
+    if(document.getElementById('modo-track').value === 'tiempo'){
+      const seg = parseInt(document.getElementById('val-intervalo').value);
+      estado.trackTimer = setInterval(() => {
+        if(estado.pos){
+          const {latitude:lat,longitude:lng,accuracy,altitude} = estado.pos.coords;
+          registrarPuntoTrack(lat, lng, accuracy, altitude);
+        }
+      }, seg * 1000);
+    }
+    info.textContent = 'Grabando track...';
+    toast('Track iniciado');
+  } else {
+    btn.textContent = 'Iniciar track';
+    btn.classList.remove('grabando');
+    clearInterval(estado.trackTimer);
+    info.textContent = `Track detenido. ${estado.tracks.length} puntos grabados.`;
+    toast('Track detenido');
+  }
+}
+
+function registrarPuntoTrack(lat, lng, acc, alt){
+  const punto = {
+    id: crypto.randomUUID(),
+    proyecto_id: PROYECTO_ID,
+    predio_id: estado.predioActual,
+    lat, lng,
+    altitud_m: alt || null,
+    precision_m: acc || null,
+    capturado_en: new Date().toISOString(),
+    sincronizado: false
+  };
+  estado.tracks.push(punto);
+  estado.trackUltPos = {lat, lng};
+  trackLayer.addLatLng([lat, lng]);
+  guardarLocal('tracks', estado.tracks);
+  document.getElementById('info-track').textContent = `Grabando... ${estado.tracks.length} pts`;
+}
+
+document.getElementById('modo-track').addEventListener('change', (e) => {
+  const lbl = document.getElementById('lbl-intervalo');
+  const inp = document.getElementById('val-intervalo');
+  if(e.target.value === 'tiempo'){
+    lbl.textContent = 'Intervalo (seg)';
+    inp.value = 5; inp.min = 2; inp.max = 60;
+  } else {
+    lbl.textContent = 'Distancia mín (m)';
+    inp.value = 10; inp.min = 1; inp.max = 500;
+  }
+});
+
+// ============================================================
+// VÉRTICES
+// ============================================================
+function marcarVertice(){
+  if(!estado.pos) return;
+  const {latitude:lat, longitude:lng, accuracy} = estado.pos.coords;
+  const v = {
+    id: crypto.randomUUID(),
+    orden: estado.vertices.length + 1,
+    lat, lng, precision_m: accuracy || null,
+    capturado_en: new Date().toISOString(),
+    sincronizado: false
+  };
+  estado.vertices.push(v);
+  actualizarPoligono();
+  actualizarListaVertices();
+  document.getElementById('btn-cerrar').disabled = estado.vertices.length < 3;
+  toast(`Vértice ${v.orden} marcado`);
+}
+
+function eliminarVertice(idx){
+  estado.vertices.splice(idx, 1);
+  estado.vertices.forEach((v,i) => v.orden = i+1);
+  actualizarPoligono();
+  actualizarListaVertices();
+}
+
+function actualizarPoligono(){
+  if(poligonoLayer) mapa.removeLayer(poligonoLayer);
+  if(estado.vertices.length < 2) return;
+  const coords = estado.vertices.map(v => [v.lat, v.lng]);
+  poligonoLayer = L.polygon(coords, {
+    color:'#534AB7', fillColor:'#7F77DD', fillOpacity:.25, weight:2
+  }).addTo(mapa);
+}
+
+function actualizarListaVertices(){
+  const lista = document.getElementById('lista-vertices');
+  if(estado.vertices.length === 0){
+    lista.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:8px;">Sin vértices aún</div>';
+    return;
+  }
+  lista.innerHTML = estado.vertices.map((v,i) => `
+    <div class="vertice-item">
+      <span class="vertice-num">${v.orden}</span>
+      <span class="vertice-coords">${v.lat.toFixed(6)}, ${v.lng.toFixed(6)}</span>
+      <span class="vertice-prec">${v.precision_m ? v.precision_m.toFixed(1)+'m' : ''}</span>
+      <button class="btn-del" onclick="eliminarVertice(${i})">×</button>
+    </div>
+  `).join('');
+}
+
+function cerrarPoligono(){
+  if(estado.vertices.length < 3){ toast('Mínimo 3 vértices'); return; }
+  const area = calcAreaHa(estado.vertices);
+  document.getElementById('info-area-ha').textContent =
+    `Área calculada: ${area.toFixed(4)} ha`;
+  cambiarTab('predio');
+  toast('Polígono cerrado. Completa los datos del predio.');
+}
+
+// ============================================================
+// PREDIO
+// ============================================================
+function guardarPredio(){
+  const nombre = document.getElementById('inp-nombre').value.trim();
+  if(!nombre){ toast('Ingresa el nombre del predio'); return; }
+  if(estado.vertices.length < 3){ toast('Marca al menos 3 vértices'); return; }
+
+  const predio = {
+    id: crypto.randomUUID(),
+    proyecto_id: PROYECTO_ID,
+    nombre,
+    propietario: document.getElementById('inp-propietario').value,
+    tecnico: document.getElementById('inp-tecnico').value,
+    observaciones: document.getElementById('inp-obs').value,
+    area_ha: calcAreaHa(estado.vertices),
+    vertices: [...estado.vertices],
+    creado_en: new Date().toISOString(),
+    sincronizado: false
+  };
+
+  const predios = cargarLocal('predios') || [];
+  predios.push(predio);
+  guardarLocal('predios', predios);
+
+  toast(`Predio "${nombre}" guardado localmente`);
+  actualizarEstadoSync();
+
+  // Si hay conexión y autosync, sube inmediatamente
+  if(estado.online && estado.autosync) sincronizar();
+}
+
+function nuevoPredio(){
+  estado.vertices = [];
+  estado.predioActual = null;
+  actualizarPoligono();
+  actualizarListaVertices();
+  document.getElementById('inp-nombre').value = '';
+  document.getElementById('inp-propietario').value = '';
+  document.getElementById('inp-obs').value = '';
+  document.getElementById('info-area-ha').textContent = '';
+  cambiarTab('gps');
+  toast('Nuevo predio iniciado');
+}
+
+// ============================================================
+// ÁREA ACREDITADA
+// ============================================================
+function cargarAreaAcreditada(){
+  // Intenta cargar de Supabase, si falla usa la guardada localmente
+  const local = cargarLocal('area_acreditada');
+  if(local) aplicarAreaAcreditada(local);
+  if(estado.online) descargarAreaSupabase();
+}
+
+async function descargarAreaSupabase(){
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/areas_acreditadas?proyecto_id=eq.${PROYECTO_ID}&select=*`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    const data = await r.json();
+    if(data && data.length > 0){
+      guardarLocal('area_acreditada', data[0]);
+      aplicarAreaAcreditada(data[0]);
+      log('Área acreditada descargada de Supabase');
+    }
+  } catch(e){ log('No se pudo descargar área acreditada: ' + e.message); }
+}
+
+function aplicarAreaAcreditada(area){
+  estado.areaAcreditada = area;
+  if(areaLayer) mapa.removeLayer(areaLayer);
+  if(area && area.geom){
+    // PostGIS retorna geom como objeto, lo convertimos a GeoJSON
+    try {
+      const geo = typeof area.geom === 'string' ? JSON.parse(area.geom) : area.geom;
+      areaLayer = L.geoJSON(geo, {
+        style:{color:'#854F0B',fillColor:'#EF9F27',fillOpacity:.1,weight:2,dashArray:'6 4'}
+      }).addTo(mapa);
+    } catch(e){}
+  }
+}
+
+function validarDentroDeArea(lat, lng){
+  const alertaEl = document.getElementById('alerta-area');
+  if(!estado.areaAcreditada || !estado.areaAcreditada.geom){
+    alertaEl.classList.remove('visible');
+    return;
+  }
+  try {
+    const geo = typeof estado.areaAcreditada.geom === 'string'
+      ? JSON.parse(estado.areaAcreditada.geom)
+      : estado.areaAcreditada.geom;
+    const dentro = puntoDentroDePoligono(lat, lng, geo.coordinates[0]);
+    alertaEl.classList.toggle('visible', !dentro);
+  } catch(e){}
+}
+
+// Ray casting algorithm — point in polygon
+function puntoDentroDePoligono(lat, lng, coords){
+  let dentro = false;
+  const x = lng, y = lat;
+  for(let i=0, j=coords.length-1; i<coords.length; j=i++){
+    const xi=coords[i][0], yi=coords[i][1];
+    const xj=coords[j][0], yj=coords[j][1];
+    if(((yi>y)!==(yj>y)) && (x<(xj-xi)*(y-yi)/(yj-yi)+xi)) dentro=!dentro;
+  }
+  return dentro;
+}
+
+// ============================================================
+// SINCRONIZACIÓN CON SUPABASE
+// ============================================================
+async function sincronizar(){
+  if(!estado.online){ toast('Sin conexión a internet'); return; }
+  log('Iniciando sincronización...');
+  const predios = (cargarLocal('predios') || []).filter(p => !p.sincronizado);
+  const tracks  = estado.tracks.filter(t => !t.sincronizado);
+
+  let ok = 0, err = 0;
+
+  for(const predio of predios){
+    try {
+      // 1. Insertar predio
+      const r1 = await fetch(`${SUPABASE_URL}/rest/v1/predios`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation'
+        },
+        body: JSON.stringify({
+          id: predio.id,
+          proyecto_id: predio.proyecto_id,
+          nombre: predio.nombre,
+          propietario: predio.propietario,
+          tecnico: predio.tecnico,
+          observaciones: predio.observaciones,
+          area_ha: predio.area_ha,
+          creado_en: predio.creado_en
+        })
+      });
+      if(!r1.ok) throw new Error(await r1.text());
+
+      // 2. Insertar vértices
+      for(const v of predio.vertices){
+        await fetch(`${SUPABASE_URL}/rest/v1/vertices`, {
+          method: 'POST',
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            id: v.id,
+            predio_id: predio.id,
+            orden: v.orden,
+            lat: v.lat,
+            lng: v.lng,
+            precision_m: v.precision_m,
+            capturado_en: v.capturado_en
+          })
+        });
+      }
+
+      // 3. Llamar función que cierra el polígono en PostGIS
+      await fetch(`${SUPABASE_URL}/rest/v1/rpc/fn_cerrar_predio`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ p_predio_id: predio.id })
+      });
+
+      predio.sincronizado = true;
+      ok++;
+      log(`OK: predio "${predio.nombre}" subido`);
+    } catch(e){
+      err++;
+      log(`ERROR predio "${predio.nombre}": ${e.message}`);
+    }
+  }
+
+  // Subir tracks en lote
+  if(tracks.length > 0){
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/tracks`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(tracks.map(t => ({
+          id: t.id, proyecto_id: t.proyecto_id, predio_id: t.predio_id,
+          lat: t.lat, lng: t.lng,
+          altitud_m: t.altitud_m, precision_m: t.precision_m,
+          capturado_en: t.capturado_en
+        })))
+      });
+      tracks.forEach(t => t.sincronizado = true);
+      log(`OK: ${tracks.length} puntos de track subidos`);
+    } catch(e){ log('ERROR tracks: ' + e.message); }
+  }
+
+  guardarLocal('predios', cargarLocal('predios') || []);
+  actualizarEstadoSync();
+  toast(`Sincronización: ${ok} OK, ${err} errores`);
+}
+
+// ============================================================
+// STORAGE LOCAL (IndexedDB simplificado via localStorage)
+// ============================================================
+function guardarLocal(clave, datos){ localStorage.setItem('gps_'+clave, JSON.stringify(datos)); }
+function cargarLocal(clave){ try{ return JSON.parse(localStorage.getItem('gps_'+clave)); }catch{ return null; } }
+
+function actualizarEstadoSync(){
+  const predios = (cargarLocal('predios') || []).filter(p => !p.sincronizado);
+  const tracks  = estado.tracks.filter(t => !t.sincronizado);
+  document.getElementById('stat-pendientes').textContent =
+    `Predios pendientes: ${predios.length} — Puntos track: ${tracks.length}`;
+}
+
+function toggleAutosync(v){ estado.autosync = v; }
+
+// ============================================================
+// CONECTIVIDAD
+// ============================================================
+function actualizarOnline(){
+  estado.online = navigator.onLine;
+  const el = document.getElementById('estado-sync');
+  el.textContent = estado.online ? 'En línea' : 'Sin conexión';
+  el.className = estado.online ? 'online' : 'offline';
+  if(estado.online){
+    cargarAreaAcreditada();
+    if(estado.autosync) sincronizar();
+  }
+}
+window.addEventListener('online',  actualizarOnline);
+window.addEventListener('offline', actualizarOnline);
+actualizarOnline();
+
+// ============================================================
+// UTILIDADES GEOMÉTRICAS
+// ============================================================
+function calcDistancia(a, b){
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI/180;
+  const dLng = (b.lng - a.lng) * Math.PI/180;
+  const s = Math.sin(dLat/2)*Math.sin(dLat/2)
+    + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)
+      *Math.sin(dLng/2)*Math.sin(dLng/2);
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+}
+
+function calcAreaHa(vertices){
+  if(vertices.length < 3) return 0;
+  // Fórmula de Shoelace en coordenadas geográficas aproximadas
+  let area = 0;
+  const R = 6371000;
+  for(let i=0; i<vertices.length; i++){
+    const j = (i+1) % vertices.length;
+    const xi = vertices[i].lng * Math.PI/180 * R * Math.cos(vertices[i].lat*Math.PI/180);
+    const yi = vertices[i].lat * Math.PI/180 * R;
+    const xj = vertices[j].lng * Math.PI/180 * R * Math.cos(vertices[j].lat*Math.PI/180);
+    const yj = vertices[j].lat * Math.PI/180 * R;
+    area += xi * yj - xj * yi;
+  }
+  return Math.abs(area) / 2 / 10000; // m² → ha
+}
+
+// ============================================================
+// UI HELPERS
+// ============================================================
+function cambiarTab(nombre){
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('activo'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('activo'));
+  document.getElementById('tab-'+nombre).classList.add('activo');
+  document.querySelectorAll('.tab')[['gps','track','predio','sync'].indexOf(nombre)].classList.add('activo');
+}
+
+let toastTimer;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+function log(msg){
+  const el = document.getElementById('log-sync');
+  el.textContent += new Date().toLocaleTimeString() + ' — ' + msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+// ============================================================
+// INICIALIZACIÓN
+// ============================================================
+actualizarListaVertices();
+actualizarEstadoSync();
+</script>
+<script>
+if("serviceWorker" in navigator){
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js")
+      .then(() => console.log("SW registrado"))
+      .catch(e => console.warn("SW error:", e));
+  });
+}
+</script>
+</body>
+</html>

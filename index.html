@@ -112,6 +112,21 @@
 
   /* Marcador GPS actual */
   .mi-posicion{width:16px;height:16px;border-radius:50%;background:#1D9E75;border:3px solid #fff;box-shadow:0 0 0 3px rgba(29,158,117,0.3);}
+
+  /* Controles flotantes sobre el mapa */
+  .mapa-controles{position:absolute;left:10px;top:10px;z-index:1000;display:flex;flex-direction:column;gap:6px;}
+
+  /* Selector de capa base */
+  .capa-selector{background:#fff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.2);overflow:hidden;display:flex;}
+  .capa-btn{padding:6px 10px;font-size:11px;font-weight:600;border:none;background:#fff;cursor:pointer;color:#666;transition:background .2s,color .2s;}
+  .capa-btn.activo{background:var(--verde);color:#fff;}
+  .capa-btn:first-child{border-radius:8px 0 0 8px;}
+  .capa-btn:last-child{border-radius:0 8px 8px 0;}
+
+  /* Botón localizar */
+  #btn-localizar{background:#fff;border:none;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.2);width:34px;height:34px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px;transition:background .2s;}
+  #btn-localizar.siguiendo{background:var(--verde);color:#fff;}
+  #btn-localizar:active{transform:scale(0.95);}
 </style>
 </head>
 <body>
@@ -121,8 +136,19 @@
   <span id="estado-sync" class="offline">Sin conexión</span>
 </header>
 
-<div id="mapa"></div>
-<div id="alerta-area">Fuera del área acreditada</div>
+<div id="mapa" style="position:relative;"></div>
+
+<!-- Controles flotantes sobre el mapa -->
+<div class="mapa-controles">
+  <div class="capa-selector">
+    <button class="capa-btn activo" id="btn-osm" onclick="cambiarCapa('osm')">OSM</button>
+    <button class="capa-btn" id="btn-sat" onclick="cambiarCapa('satelite')">Satélite</button>
+    <button class="capa-btn" id="btn-hibrido" onclick="cambiarCapa('hibrido')">Híbrido</button>
+  </div>
+  <button id="btn-localizar" onclick="toggleSeguir()" title="Centrar en mi posición">📍</button>
+</div>
+
+<div id="alerta-area">⚠️ Fuera del área acreditada</div>
 <div id="toast"></div>
 
 <div id="panel">
@@ -252,13 +278,84 @@ const estado = {
 const mapa = L.map('mapa', {zoomControl:false, attributionControl:false});
 L.control.zoom({position:'topright'}).addTo(mapa);
 
-// Tiles OpenStreetMap (funciona con internet; para offline usar tiles locales)
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 20,
-  maxNativeZoom: 19
-}).addTo(mapa);
+// ── CAPAS BASE ──────────────────────────────────────────────
+const capas = {
+  osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:20, maxNativeZoom:19
+  }),
+  satelite: L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom:20, maxNativeZoom:19,
+    attribution:'Esri, Maxar, Earthstar Geographics'
+  }),
+  hibrido: L.layerGroup([
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom:20, maxNativeZoom:19
+    }),
+    L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom:20, maxNativeZoom:19, opacity:0.35
+    })
+  ])
+};
 
-mapa.setView([-7.15, -78.51], 13); // centro en Cajamarca
+let capaActiva = 'osm';
+capas.osm.addTo(mapa);
+
+function cambiarCapa(nombre){
+  // Quitar capa anterior
+  if(nombre === capaActiva) return;
+  if(capaActiva === 'hibrido') capas.hibrido.getLayers().forEach(l => mapa.removeLayer(l));
+  else mapa.removeLayer(capas[capaActiva]);
+
+  // Agregar nueva capa (debajo de polígonos)
+  if(nombre === 'hibrido') capas.hibrido.getLayers().forEach(l => l.addTo(mapa).bringToBack());
+  else capas[nombre].addTo(mapa).bringToBack();
+
+  capaActiva = nombre;
+
+  // Actualizar botones
+  ['osm','satelite','hibrido'].forEach(n => {
+    document.getElementById('btn-'+n.replace('satelite','sat')).classList.toggle('activo', n===nombre);
+  });
+  // id especial para satélite
+  document.getElementById('btn-sat').classList.toggle('activo', nombre==='satelite');
+  document.getElementById('btn-osm').classList.toggle('activo', nombre==='osm');
+  document.getElementById('btn-hibrido').classList.toggle('activo', nombre==='hibrido');
+}
+
+// ── SEGUIMIENTO DE POSICIÓN ──────────────────────────────────
+let siguiendo = true;  // por defecto el mapa sigue al GPS
+
+function toggleSeguir(){
+  siguiendo = !siguiendo;
+  const btn = document.getElementById('btn-localizar');
+  if(siguiendo){
+    btn.classList.add('siguiendo');
+    btn.textContent = '📍';
+    // Centrar inmediatamente si ya tenemos posición
+    if(estado.pos){
+      const {latitude:lat, longitude:lng} = estado.pos.coords;
+      mapa.setView([lat, lng], 17, {animate:true});
+    }
+    toast('Siguiendo posición');
+  } else {
+    btn.classList.remove('siguiendo');
+    btn.textContent = '📍';
+    toast('Mapa libre — toca 📍 para volver');
+  }
+}
+
+// Al mover el mapa manualmente, desactivar seguimiento
+mapa.on('dragstart', () => {
+  if(siguiendo){
+    siguiendo = false;
+    document.getElementById('btn-localizar').classList.remove('siguiendo');
+  }
+});
+
+mapa.setView([-7.15, -78.51], 13); // centro inicial en Cajamarca
 
 const iconoPosicion = L.divIcon({className:'mi-posicion',iconSize:[16,16],iconAnchor:[8,8]});
 let marcadorPos = null;
@@ -287,9 +384,17 @@ const watchId = navigator.geolocation.watchPosition(
     document.getElementById('btn-cerrar').disabled = estado.vertices.length < 3;
 
     // Marcador en mapa
-    if(!marcadorPos) marcadorPos = L.marker([lat,lng],{icon:iconoPosicion}).addTo(mapa);
-    else marcadorPos.setLatLng([lat,lng]);
-    mapa.setView([lat,lng]);
+    if(!marcadorPos){
+      marcadorPos = L.marker([lat,lng],{icon:iconoPosicion}).addTo(mapa);
+      // Primera posición: centrar siempre
+      mapa.setView([lat,lng], 17, {animate:true});
+      siguiendo = true;
+      document.getElementById('btn-localizar').classList.add('siguiendo');
+    } else {
+      marcadorPos.setLatLng([lat,lng]);
+      // Solo seguir si está activo
+      if(siguiendo) mapa.setView([lat,lng]);
+    }
 
     // Validar si está dentro del área acreditada
     validarDentroDeArea(lat, lng);

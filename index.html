@@ -329,21 +329,11 @@ function cambiarCapa(nombre){
 let siguiendo = true;  // por defecto el mapa sigue al GPS
 
 function toggleSeguir(){
-  siguiendo = !siguiendo;
-  const btn = document.getElementById('btn-localizar');
-  if(siguiendo){
-    btn.classList.add('siguiendo');
-    btn.textContent = '📍';
-    // Centrar inmediatamente si ya tenemos posición
-    if(estado.pos){
-      const {latitude:lat, longitude:lng} = estado.pos.coords;
-      mapa.setView([lat, lng], 17, {animate:true});
-    }
-    toast('Siguiendo posición');
+  if(estado.pos){
+    const {latitude:lat, longitude:lng} = estado.pos.coords;
+    mapa.setView([lat, lng], 18);
   } else {
-    btn.classList.remove('siguiendo');
-    btn.textContent = '📍';
-    toast('Mapa libre — toca 📍 para volver');
+    toast('Esperando señal GPS...');
   }
 }
 

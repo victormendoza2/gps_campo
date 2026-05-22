@@ -397,7 +397,7 @@ const watchId = navigator.geolocation.watchPosition(
     }
   },
   (err) => { toast('Error GPS: ' + err.message); },
-  {enableHighAccuracy:true, maximumAge:2000, timeout:15000}
+  {enableHighAccuracy:true, maximumAge:5000, timeout:20000}
 );
 
 // ============================================================
@@ -638,43 +638,49 @@ function puntoDentroDePoligono(lat, lng, coords){
 async function sincronizar(){
   if(!estado.online){ toast('Sin conexión a internet'); return; }
   log('Iniciando sincronización...');
-  const predios = (cargarLocal('predios') || []).filter(p => !p.sincronizado);
+
+  const todosLosPredios = cargarLocal('predios') || [];
+  const predios = todosLosPredios.filter(p => !p.sincronizado);
   const tracks  = estado.tracks.filter(t => !t.sincronizado);
 
   let ok = 0, err = 0;
 
   for(const predio of predios){
     try {
-      // 1. Insertar predio
-      const r1 = await fetch(`${SUPABASE_URL}/rest/v1/predios`, {
+      // UPSERT: si ya existe el predio lo actualiza, evita error de clave duplicada
+      const r1 = await fetchConTimeout(`${SUPABASE_URL}/rest/v1/predios`, {
         method: 'POST',
         headers: {
           apikey: SUPABASE_KEY,
           Authorization: `Bearer ${SUPABASE_KEY}`,
           'Content-Type': 'application/json',
-          Prefer: 'return=representation'
+          Prefer: 'resolution=merge-duplicates,return=minimal'
         },
         body: JSON.stringify({
           id: predio.id,
           proyecto_id: predio.proyecto_id,
           nombre: predio.nombre,
-          propietario: predio.propietario,
-          tecnico: predio.tecnico,
-          observaciones: predio.observaciones,
+          propietario: predio.propietario || '',
+          tecnico: predio.tecnico || '',
+          observaciones: predio.observaciones || '',
           area_ha: predio.area_ha,
           creado_en: predio.creado_en
         })
       });
-      if(!r1.ok) throw new Error(await r1.text());
+      if(!r1.ok){
+        const txt = await r1.text();
+        throw new Error(txt);
+      }
 
-      // 2. Insertar vértices
+      // UPSERT de vértices (ignora si ya existen)
       for(const v of predio.vertices){
-        await fetch(`${SUPABASE_URL}/rest/v1/vertices`, {
+        await fetchConTimeout(`${SUPABASE_URL}/rest/v1/vertices`, {
           method: 'POST',
           headers: {
             apikey: SUPABASE_KEY,
             Authorization: `Bearer ${SUPABASE_KEY}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates,return=minimal'
           },
           body: JSON.stringify({
             id: v.id,
@@ -682,14 +688,14 @@ async function sincronizar(){
             orden: v.orden,
             lat: v.lat,
             lng: v.lng,
-            precision_m: v.precision_m,
+            precision_m: v.precision_m || null,
             capturado_en: v.capturado_en
           })
         });
       }
 
-      // 3. Llamar función que cierra el polígono en PostGIS
-      await fetch(`${SUPABASE_URL}/rest/v1/rpc/fn_cerrar_predio`, {
+      // Cerrar polígono en PostGIS
+      await fetchConTimeout(`${SUPABASE_URL}/rest/v1/rpc/fn_cerrar_predio`, {
         method: 'POST',
         headers: {
           apikey: SUPABASE_KEY,
@@ -699,40 +705,74 @@ async function sincronizar(){
         body: JSON.stringify({ p_predio_id: predio.id })
       });
 
-      predio.sincronizado = true;
+      // Marcar como sincronizado en el array local
+      const idx = todosLosPredios.findIndex(p => p.id === predio.id);
+      if(idx >= 0) todosLosPredios[idx].sincronizado = true;
       ok++;
-      log(`OK: predio "${predio.nombre}" subido`);
+      log(`✓ Predio "${predio.nombre}" subido correctamente`);
+
     } catch(e){
       err++;
-      log(`ERROR predio "${predio.nombre}": ${e.message}`);
+      log(`✗ ERROR "${predio.nombre}": ${e.message}`);
     }
   }
 
-  // Subir tracks en lote
+  // Subir tracks en lote (UPSERT)
   if(tracks.length > 0){
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/tracks`, {
+      const r = await fetchConTimeout(`${SUPABASE_URL}/rest/v1/tracks`, {
         method: 'POST',
         headers: {
           apikey: SUPABASE_KEY,
           Authorization: `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates,return=minimal'
         },
         body: JSON.stringify(tracks.map(t => ({
-          id: t.id, proyecto_id: t.proyecto_id, predio_id: t.predio_id,
+          id: t.id,
+          proyecto_id: t.proyecto_id,
+          predio_id: t.predio_id || null,
           lat: t.lat, lng: t.lng,
-          altitud_m: t.altitud_m, precision_m: t.precision_m,
+          altitud_m: t.altitud_m || null,
+          precision_m: t.precision_m || null,
           capturado_en: t.capturado_en
         })))
       });
-      tracks.forEach(t => t.sincronizado = true);
-      log(`OK: ${tracks.length} puntos de track subidos`);
-    } catch(e){ log('ERROR tracks: ' + e.message); }
+      if(r.ok){
+        tracks.forEach(t => {
+          const idx = estado.tracks.findIndex(x => x.id === t.id);
+          if(idx >= 0) estado.tracks[idx].sincronizado = true;
+        });
+        log(`✓ ${tracks.length} puntos de track subidos`);
+      } else {
+        log(`✗ ERROR tracks: ${await r.text()}`);
+      }
+    } catch(e){ log(`✗ ERROR tracks: ${e.message}`); }
   }
 
-  guardarLocal('predios', cargarLocal('predios') || []);
+  // Guardar estado actualizado
+  guardarLocal('predios', todosLosPredios);
   actualizarEstadoSync();
-  toast(`Sincronización: ${ok} OK, ${err} errores`);
+
+  const msg = ok > 0 || tracks.length > 0
+    ? `Sincronizado: ${ok} predios, ${tracks.filter(t=>t.sincronizado).length} pts track`
+    : err > 0 ? `${err} errores — revisa el log` : 'Sin datos pendientes';
+  toast(msg);
+}
+
+// Fetch con timeout para evitar cuelgues offline
+async function fetchConTimeout(url, opciones, ms = 10000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const resp = await fetch(url, { ...opciones, signal: controller.signal });
+    clearTimeout(timer);
+    return resp;
+  } catch(e) {
+    clearTimeout(timer);
+    if(e.name === 'AbortError') throw new Error('Tiempo agotado (sin señal)');
+    throw e;
+  }
 }
 
 // ============================================================

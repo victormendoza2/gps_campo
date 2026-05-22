@@ -570,25 +570,33 @@ function nuevoPredio(){
 // ÁREA ACREDITADA
 // ============================================================
 function cargarAreaAcreditada(){
-  // Intenta cargar de Supabase, si falla usa la guardada localmente
   const local = cargarLocal('area_acreditada');
-  if(local) aplicarAreaAcreditada(local);
+  if(local){
+    aplicarAreaAcreditada(local);
+    log('Area acreditada cargada desde memoria local');
+  }
   if(estado.online) descargarAreaSupabase();
 }
 
 async function descargarAreaSupabase(){
   try {
-    const r = await fetch(
+    const r = await fetchConTimeout(
       `${SUPABASE_URL}/rest/v1/areas_acreditadas?proyecto_id=eq.${PROYECTO_ID}&select=*`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } },
+      8000
     );
+    if(!r.ok) return;
     const data = await r.json();
     if(data && data.length > 0){
       guardarLocal('area_acreditada', data[0]);
       aplicarAreaAcreditada(data[0]);
-      log('Área acreditada descargada de Supabase');
+      log('Area acreditada actualizada desde Supabase');
     }
-  } catch(e){ log('No se pudo descargar área acreditada: ' + e.message); }
+  } catch(e){
+    if(cargarLocal('area_acreditada')){
+      log('Area acreditada: usando version guardada localmente');
+    }
+  }
 }
 
 function aplicarAreaAcreditada(area){
@@ -864,6 +872,16 @@ function log(msg){
 // ============================================================
 // INICIALIZACIÓN
 // ============================================================
+
+// Recuperar tracks guardados localmente al reabrir la app
+const tracksGuardados = cargarLocal('tracks') || [];
+if(tracksGuardados.length > 0){
+  estado.tracks = tracksGuardados;
+  tracksGuardados.forEach(t => trackLayer.addLatLng([t.lat, t.lng]));
+  const pendientes = tracksGuardados.filter(t => !t.sincronizado).length;
+  if(pendientes > 0) log(pendientes + ' puntos de track pendientes de subir');
+}
+
 actualizarListaVertices();
 actualizarEstadoSync();
 </script>

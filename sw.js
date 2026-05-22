@@ -1,57 +1,68 @@
-const CACHE = 'gps-campo-v1';
-const ARCHIVOS = [
+const CACHE = 'gps-campo-v2';
+const ARCHIVOS_BASE = [
   '/',
   '/index.html',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
-  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
 
-// Instalación: cachea todos los archivos base
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(ARCHIVOS))
+    caches.open(CACHE).then(c => c.addAll(ARCHIVOS_BASE).catch(() => {}))
   );
   self.skipWaiting();
 });
 
-// Activación: limpia cachés viejos
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k !== CACHE && k !== CACHE+'_tiles').map(k => caches.delete(k)))
     )
   );
   self.clients.claim();
 });
 
-// Fetch: cache-first para archivos de app, network-first para tiles y Supabase
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // Tiles del mapa: network-first con fallback a caché
-  if(url.hostname.includes('tile.openstreetmap.org')){
+  // Supabase: siempre network, nunca cachear
+  if(url.hostname.includes('supabase.co')){
     e.respondWith(
-      fetch(e.request)
-        .then(r => {
-          const clone = r.clone();
-          caches.open(CACHE+'_tiles').then(c => c.put(e.request, clone));
-          return r;
-        })
-        .catch(() => caches.match(e.request))
+      fetch(e.request).catch(() =>
+        new Response(JSON.stringify({error:'sin_conexion'}),
+          {headers:{'Content-Type':'application/json'}})
+      )
     );
     return;
   }
 
-  // Supabase: siempre network (no cachear datos del servidor)
-  if(url.hostname.includes('supabase.co')){
-    e.respondWith(fetch(e.request).catch(() => new Response('{}',{headers:{'Content-Type':'application/json'}})));
+  // Tiles OSM: cache-first, fallback a tile gris
+  if(url.hostname.includes('tile.openstreetmap.org') ||
+     url.hostname.includes('arcgisonline.com')){
+    e.respondWith(
+      caches.open(CACHE+'_tiles').then(async cache => {
+        const cached = await cache.match(e.request);
+        if(cached) return cached;
+        try {
+          const resp = await fetch(e.request);
+          cache.put(e.request, resp.clone());
+          return resp;
+        } catch {
+          // Tile gris de 1x1px como fallback
+          return new Response(
+            atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='),
+            {headers:{'Content-Type':'image/png'}}
+          );
+        }
+      })
+    );
     return;
   }
 
-  // Todo lo demás: cache-first
+  // App shell: cache-first
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request))
+    caches.match(e.request).then(cached => cached || fetch(e.request).catch(() =>
+      caches.match('/index.html')
+    ))
   );
 });

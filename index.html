@@ -157,18 +157,33 @@
     <button class="tab" onclick="cambiarTab('track')">Track</button>
     <button class="tab" onclick="cambiarTab('predio')">Predio</button>
     <button class="tab" onclick="cambiarTab('sync')">Nube</button>
+    <button class="tab" onclick="cambiarTab('areas')">&#9651; Areas</button>
   </div>
 
   <!-- TAB GPS -->
   <div id="tab-gps" class="tab-content activo">
+
+    <!-- Selector de sistema de coordenadas -->
+    <div class="track-config" style="margin-bottom:10px;">
+      <div class="track-row">
+        <label>Sistema de coordenadas</label>
+        <select id="sel-srs" onchange="actualizarCoordenadas()">
+          <option value="geo">Geograficas (WGS84)</option>
+          <option value="17s">UTM Zona 17S (EPSG:32717)</option>
+          <option value="18s">UTM Zona 18S (EPSG:32718)</option>
+          <option value="19s">UTM Zona 19S (EPSG:32719)</option>
+        </select>
+      </div>
+    </div>
+
     <div class="info-grid">
       <div class="info-card">
-        <div class="info-label">Latitud</div>
-        <div class="info-val" id="val-lat">--</div>
+        <div class="info-label" id="lbl-x">Latitud</div>
+        <div class="info-val" id="val-lat" style="font-size:12px;">--</div>
       </div>
       <div class="info-card">
-        <div class="info-label">Longitud</div>
-        <div class="info-val" id="val-lng">--</div>
+        <div class="info-label" id="lbl-y">Longitud</div>
+        <div class="info-val" id="val-lng" style="font-size:12px;">--</div>
       </div>
       <div class="info-card">
         <div class="info-label">Precisión</div>
@@ -243,9 +258,27 @@
         Sincronización automática al detectar señal
       </div>
     </div>
-    <button class="btn-primario" id="btn-sync" onclick="sincronizar()">Subir a Supabase ahora</button>
+    <button class="btn-primario" id="btn-sync" onclick="sincronizar()">&#8593; Subir a Supabase ahora</button>
+    <button class="btn-secundario" onclick="exportarGPX()" style="width:100%;margin-bottom:8px;">&#8595; Descargar GPX al celular</button>
+    <button class="btn-secundario" onclick="exportarKMLPredios()" style="width:100%;margin-bottom:8px;">&#8595; Descargar KML predios</button>
+    <button class="btn-peligro" onclick="limpiarDatosLocales()" style="width:100%;margin-bottom:8px;">Limpiar datos locales</button>
     <div id="log-sync">Esperando conexión...</div>
   </div>
+
+  <!-- TAB AREAS ACREDITADAS -->
+  <div id="tab-areas" class="tab-content">
+    <div class="sync-card">
+      <h4>Areas acreditadas</h4>
+      <div class="sync-stat" id="stat-areas">Sin areas cargadas</div>
+    </div>
+    <button class="btn-primario" onclick="descargarAreaSupabase()" style="width:100%;margin-bottom:8px;">&#8635; Actualizar desde Supabase</button>
+    <button class="btn-secundario" onclick="document.getElementById('inp-kml').click()" style="width:100%;margin-bottom:8px;">&#8593; Cargar KML desde el celular</button>
+    <input type="file" id="inp-kml" accept=".kml,.kmz" style="display:none" onchange="cargarKMLLocal(this)"/>
+    <button class="btn-peligro" onclick="limpiarAreaMapa()" style="width:100%;margin-bottom:8px;">&#10005; Eliminar areas del mapa</button>
+    <div style="font-size:11px;color:#888;padding:4px 0 8px 0;">El KML se guarda en el celular y se usa sin internet</div>
+    <div id="log-areas" style="background:#fff;border:1px solid var(--borde);border-radius:8px;padding:8px;font-size:11px;color:#555;font-family:monospace;max-height:80px;overflow-y:auto;white-space:pre-wrap;">Sin actividad</div>
+  </div>
+
 </div>
 
 <script>
@@ -260,14 +293,15 @@ const PROYECTO_ID  = '5bcf5e0e-f2e9-47b2-8fc1-361242e5eb0f';  // de la tabla pro
 // ESTADO GLOBAL
 // ============================================================
 const estado = {
-  pos: null,          // posición GPS actual
-  vertices: [],       // vértices del predio actual
-  tracks: [],         // puntos del track actual
+  pos: null,
+  vertices: [],
+  tracks: [],
   trackActivo: false,
   trackTimer: null,
   trackUltPos: null,
   predioActual: null,
-  areaAcreditada: null, // GeoJSON del polígono del área
+  sesionActual: null,   // UUID de la sesion de track actual
+  areaAcreditada: null,
   online: false,
   autosync: false
 };
@@ -362,8 +396,8 @@ const watchId = navigator.geolocation.watchPosition(
     const {latitude:lat, longitude:lng, accuracy, altitude} = pos.coords;
 
     // Actualizar UI
-    document.getElementById('val-lat').textContent  = lat.toFixed(7);
-    document.getElementById('val-lng').textContent  = lng.toFixed(7);
+    // Actualizar coordenadas segun sistema seleccionado
+    actualizarCoordenadas();
     document.getElementById('val-prec').textContent = accuracy ? accuracy.toFixed(1)+' m' : '--';
     document.getElementById('val-alt').textContent  = altitude ? altitude.toFixed(1)+' m' : '--';
 
@@ -408,6 +442,8 @@ function toggleTrack(){
   const btn = document.getElementById('btn-track');
   const info = document.getElementById('info-track');
   if(estado.trackActivo){
+    // Nuevo sesion_id para cada recorrido — clave para secuencia correcta en QGIS
+    estado.sesionActual = crypto.randomUUID();
     btn.textContent = 'Detener track';
     btn.classList.add('grabando');
     if(document.getElementById('modo-track').value === 'tiempo'){
@@ -425,6 +461,7 @@ function toggleTrack(){
     btn.textContent = 'Iniciar track';
     btn.classList.remove('grabando');
     clearInterval(estado.trackTimer);
+    estado.sesionActual = null;
     info.textContent = `Track detenido. ${estado.tracks.length} puntos grabados.`;
     toast('Track detenido');
   }
@@ -435,6 +472,7 @@ function registrarPuntoTrack(lat, lng, acc, alt){
     id: crypto.randomUUID(),
     proyecto_id: PROYECTO_ID,
     predio_id: estado.predioActual,
+    sesion_id: estado.sesionActual || crypto.randomUUID(),
     lat, lng,
     altitud_m: alt || null,
     precision_m: acc || null,
@@ -572,7 +610,12 @@ function nuevoPredio(){
 function cargarAreaAcreditada(){
   const local = cargarLocal('area_acreditada');
   if(local){
-    aplicarAreaAcreditada(local);
+    // Puede ser FeatureCollection (nuevo) o objeto simple (viejo)
+    if(local.type === 'FeatureCollection'){
+      aplicarAreasGeoJSON(local);
+    } else {
+      aplicarAreaAcreditada(local);
+    }
     log('Area acreditada cargada desde memoria local');
   }
   if(estado.online) descargarAreaSupabase();
@@ -580,23 +623,89 @@ function cargarAreaAcreditada(){
 
 async function descargarAreaSupabase(){
   try {
+    // Pedir geometria como GeoJSON directamente desde PostGIS
     const r = await fetchConTimeout(
-      `${SUPABASE_URL}/rest/v1/areas_acreditadas?proyecto_id=eq.${PROYECTO_ID}&select=*`,
+      `${SUPABASE_URL}/rest/v1/rpc/fn_areas_acreditadas_geojson`,
+      {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ p_proyecto_id: PROYECTO_ID })
+      },
+      8000
+    );
+    if(!r.ok){
+      // Fallback: pedir sin geometria y usar funcion SQL
+      await descargarAreaFallback();
+      return;
+    }
+    const data = await r.json();
+    if(data && data.features && data.features.length > 0){
+      guardarLocal('area_acreditada', data);
+      aplicarAreasGeoJSON(data);
+      log('Areas acreditadas cargadas: ' + data.features.length + ' poligonos');
+    }
+  } catch(e){
+    await descargarAreaFallback();
+  }
+}
+
+async function descargarAreaFallback(){
+  try {
+    // Pedir geometria como texto GeoJSON via columna calculada
+    const r = await fetchConTimeout(
+      `${SUPABASE_URL}/rest/v1/areas_acreditadas?proyecto_id=eq.${PROYECTO_ID}&select=id,nombre,ST_AsGeoJSON(geom)`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } },
       8000
     );
     if(!r.ok) return;
     const data = await r.json();
     if(data && data.length > 0){
-      guardarLocal('area_acreditada', data[0]);
-      aplicarAreaAcreditada(data[0]);
-      log('Area acreditada actualizada desde Supabase');
+      // Construir FeatureCollection manual
+      const fc = {
+        type: 'FeatureCollection',
+        features: data.map(a => ({
+          type: 'Feature',
+          properties: { nombre: a.nombre, id: a.id },
+          geometry: typeof a['ST_AsGeoJSON(geom)'] === 'string'
+            ? JSON.parse(a['ST_AsGeoJSON(geom)'])
+            : a['ST_AsGeoJSON(geom)']
+        })).filter(f => f.geometry)
+      };
+      if(fc.features.length > 0){
+        guardarLocal('area_acreditada', fc);
+        aplicarAreasGeoJSON(fc);
+        log('Areas acreditadas cargadas: ' + fc.features.length + ' poligonos');
+      }
     }
   } catch(e){
     if(cargarLocal('area_acreditada')){
       log('Area acreditada: usando version guardada localmente');
     }
   }
+}
+
+function aplicarAreasGeoJSON(geojson){
+  if(areaLayer) mapa.removeLayer(areaLayer);
+  areaLayer = L.geoJSON(geojson, {
+    style: {
+      color: '#854F0B',
+      fillColor: '#EF9F27',
+      fillOpacity: 0.1,
+      weight: 2,
+      dashArray: '6 4'
+    }
+  }).addTo(mapa);
+  // Guardar para validacion offline
+  estado.areaAcreditada = geojson;
+  log('Areas acreditadas dibujadas en el mapa');
+  const statEl = document.getElementById('stat-areas');
+  if(statEl) statEl.textContent = (geojson.features ? geojson.features.length : 1) + ' areas cargadas';
+  const logEl = document.getElementById('log-areas');
+  if(logEl) logEl.textContent = 'Areas activas en el mapa';
 }
 
 function aplicarAreaAcreditada(area){
@@ -615,16 +724,35 @@ function aplicarAreaAcreditada(area){
 
 function validarDentroDeArea(lat, lng){
   const alertaEl = document.getElementById('alerta-area');
-  if(!estado.areaAcreditada || !estado.areaAcreditada.geom){
+  if(!estado.areaAcreditada){
     alertaEl.classList.remove('visible');
     return;
   }
   try {
-    const geo = typeof estado.areaAcreditada.geom === 'string'
-      ? JSON.parse(estado.areaAcreditada.geom)
-      : estado.areaAcreditada.geom;
-    const dentro = puntoDentroDePoligono(lat, lng, geo.coordinates[0]);
-    alertaEl.classList.toggle('visible', !dentro);
+    let dentroDeAlguna = false;
+    const fc = estado.areaAcreditada;
+
+    // Soporta FeatureCollection (nuevo formato)
+    if(fc.type === 'FeatureCollection' && fc.features){
+      for(const feat of fc.features){
+        if(!feat.geometry) continue;
+        const geo = feat.geometry;
+        if(geo.type === 'Polygon'){
+          if(puntoDentroDePoligono(lat, lng, geo.coordinates[0])){ dentroDeAlguna = true; break; }
+        } else if(geo.type === 'MultiPolygon'){
+          for(const parte of geo.coordinates){
+            if(puntoDentroDePoligono(lat, lng, parte[0])){ dentroDeAlguna = true; break; }
+          }
+        }
+        if(dentroDeAlguna) break;
+      }
+    } else if(fc.geom){
+      // Formato viejo
+      const geo = typeof fc.geom === 'string' ? JSON.parse(fc.geom) : fc.geom;
+      dentroDeAlguna = puntoDentroDePoligono(lat, lng, geo.coordinates[0]);
+    }
+
+    alertaEl.classList.toggle('visible', !dentroDeAlguna);
   } catch(e){}
 }
 
@@ -740,6 +868,7 @@ async function sincronizar(){
           id: t.id,
           proyecto_id: t.proyecto_id,
           predio_id: t.predio_id || null,
+          sesion_id: t.sesion_id || null,
           lat: t.lat, lng: t.lng,
           altitud_m: t.altitud_m || null,
           precision_m: t.precision_m || null,
@@ -851,7 +980,7 @@ function cambiarTab(nombre){
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('activo'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('activo'));
   document.getElementById('tab-'+nombre).classList.add('activo');
-  document.querySelectorAll('.tab')[['gps','track','predio','sync'].indexOf(nombre)].classList.add('activo');
+  document.querySelectorAll('.tab')[['gps','track','predio','sync','areas'].indexOf(nombre)].classList.add('activo');
 }
 
 let toastTimer;
@@ -873,6 +1002,264 @@ function log(msg){
 // INICIALIZACIÓN
 // ============================================================
 
+// ============================================================
+// EXPORTAR GPX AL CELULAR
+// ============================================================
+function exportarGPX(){
+  const tracks = estado.tracks;
+  if(tracks.length === 0){ toast('Sin puntos de track para exportar'); return; }
+
+  // Agrupar por sesion_id
+  const sesiones = {};
+  tracks.forEach(t => {
+    const key = t.sesion_id || 'sin_sesion';
+    if(!sesiones[key]) sesiones[key] = [];
+    sesiones[key].push(t);
+  });
+
+  let trksegs = '';
+  Object.values(sesiones).forEach(pts => {
+    pts.sort((a,b) => new Date(a.capturado_en) - new Date(b.capturado_en));
+    trksegs += '<trkseg>';
+    pts.forEach(p => {
+      trksegs += `<trkpt lat="${p.lat}" lon="${p.lng}">`;
+      if(p.altitud_m) trksegs += `<ele>${p.altitud_m}</ele>`;
+      trksegs += `<time>${p.capturado_en}</time></trkpt>`;
+    });
+    trksegs += '</trkseg>';
+  });
+
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPS Campo App">
+  <trk><name>Track campo</name>${trksegs}</trk>
+</gpx>`;
+
+  descargarArchivo(gpx, 'track_campo_' + fechaHoy() + '.gpx', 'application/gpx+xml');
+  toast('GPX descargado');
+}
+
+// ============================================================
+// EXPORTAR KML DE PREDIOS AL CELULAR
+// ============================================================
+function exportarKMLPredios(){
+  const predios = cargarLocal('predios') || [];
+  if(predios.length === 0){ toast('Sin predios guardados'); return; }
+
+  let placemarks = '';
+  predios.forEach(p => {
+    if(!p.vertices || p.vertices.length < 3) return;
+    const coords = p.vertices.map(v => `${v.lng},${v.lat},0`).join(' ');
+    const primero = p.vertices[0];
+    placemarks += `
+    <Placemark>
+      <name>${p.nombre || 'Sin nombre'}</name>
+      <description>Propietario: ${p.propietario || ''} | Area: ${p.area_ha || ''} ha | Tecnico: ${p.tecnico || ''}</description>
+      <Polygon>
+        <outerBoundaryIs><LinearRing>
+          <coordinates>${coords} ${primero.lng},${primero.lat},0</coordinates>
+        </LinearRing></outerBoundaryIs>
+      </Polygon>
+    </Placemark>`;
+  });
+
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document><name>Predios campo ${fechaHoy()}</name>${placemarks}
+</Document></kml>`;
+
+  descargarArchivo(kml, 'predios_' + fechaHoy() + '.kml', 'application/vnd.google-earth.kml+xml');
+  toast('KML de predios descargado');
+}
+
+// ============================================================
+// CARGAR KML LOCAL PARA AREAS ACREDITADAS
+// ============================================================
+function cargarKMLLocal(input){
+  const archivo = input.files[0];
+  if(!archivo) return;
+
+  const lector = new FileReader();
+  lector.onload = function(e){
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(e.target.result, 'text/xml');
+      const placemarks = xmlDoc.querySelectorAll('Placemark');
+      const features = [];
+
+      placemarks.forEach(pm => {
+        const nombre = pm.querySelector('name')?.textContent || 'Area';
+        // Soporta Polygon y MultiGeometry
+        const polys = pm.querySelectorAll('Polygon');
+        polys.forEach(poly => {
+          const coordsText = poly.querySelector('outerBoundaryIs LinearRing coordinates')?.textContent?.trim();
+          if(!coordsText) return;
+          const coords = coordsText.split(/\s+/).map(c => {
+            const parts = c.split(',');
+            return [parseFloat(parts[0]), parseFloat(parts[1])];
+          }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+
+          if(coords.length < 3) return;
+          features.push({
+            type: 'Feature',
+            properties: { nombre },
+            geometry: { type: 'Polygon', coordinates: [coords] }
+          });
+        });
+      });
+
+      if(features.length === 0){
+        document.getElementById('log-areas').textContent = 'ERROR: No se encontraron polígonos en el KML';
+        toast('KML sin polígonos válidos');
+        return;
+      }
+
+      const fc = { type: 'FeatureCollection', features };
+      guardarLocal('area_acreditada', fc);
+      aplicarAreasGeoJSON(fc);
+
+      document.getElementById('stat-areas').textContent = features.length + ' areas cargadas desde KML';
+      document.getElementById('log-areas').textContent = 'KML cargado: ' + features.length + ' poligonos de ' + archivo.name;
+      toast(features.length + ' areas cargadas desde KML');
+
+    } catch(err){
+      document.getElementById('log-areas').textContent = 'ERROR al leer KML: ' + err.message;
+      toast('Error al leer el KML');
+    }
+  };
+  lector.readAsText(archivo);
+  // Limpiar input para permitir cargar el mismo archivo de nuevo
+  input.value = '';
+}
+
+// ============================================================
+// UTILIDADES DE DESCARGA
+// ============================================================
+function limpiarAreaMapa(){
+  localStorage.removeItem('gps_area_acreditada');
+  estado.areaAcreditada = null;
+  if(areaLayer){ mapa.removeLayer(areaLayer); areaLayer = null; }
+  const statEl = document.getElementById('stat-areas');
+  if(statEl) statEl.textContent = 'Sin areas cargadas';
+  const logEl = document.getElementById('log-areas');
+  if(logEl) logEl.textContent = 'Areas eliminadas del mapa';
+  toast('Areas eliminadas del mapa');
+}
+
+function descargarArchivo(contenido, nombre, tipo){
+  const blob = new Blob([contenido], { type: tipo });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function fechaHoy(){
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth()+1).padStart(2,'0') + '-' +
+    String(d.getDate()).padStart(2,'0');
+}
+
+// ============================================================
+// CONVERSION UTM — Algoritmo directo WGS84 a UTM
+// ============================================================
+function geoAUtm(lat, lng){
+  const a  = 6378137.0;
+  const f  = 1/298.257223563;
+  const b  = a*(1-f);
+  const e2 = 1 - (b*b)/(a*a);
+  const e  = Math.sqrt(e2);
+  const k0 = 0.9996;
+  const E0 = 500000;
+
+  // Zona UTM automatica basada en longitud
+  const zona = Math.floor((lng + 180)/6) + 1;
+  const lcm  = (zona - 1)*6 - 180 + 3; // meridiano central
+
+  const phi  = lat * Math.PI/180;
+  const lam  = (lng - lcm) * Math.PI/180;
+
+  const N    = a / Math.sqrt(1 - e2*Math.sin(phi)*Math.sin(phi));
+  const T    = Math.tan(phi)*Math.tan(phi);
+  const C    = (e2/(1-e2))*Math.cos(phi)*Math.cos(phi);
+  const A    = Math.cos(phi)*lam;
+
+  const M = a*(
+    (1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256)*phi
+    -(3*e2/8 + 3*e2*e2/32 + 45*e2*e2*e2/1024)*Math.sin(2*phi)
+    +(15*e2*e2/256 + 45*e2*e2*e2/1024)*Math.sin(4*phi)
+    -(35*e2*e2*e2/3072)*Math.sin(6*phi)
+  );
+
+  const este = k0*N*(A+(1-T+C)*A*A*A/6+(5-18*T+T*T+72*C-58*(e2/(1-e2)))*A*A*A*A*A/120) + E0;
+  const norte = k0*(M + N*Math.tan(phi)*(A*A/2+(5-T+9*C+4*C*C)*A*A*A*A/24+(61-58*T+T*T+600*C-330*(e2/(1-e2)))*A*A*A*A*A*A/720));
+  const N0 = lat < 0 ? 10000000 : 0;
+
+  return { este: Math.round(este*100)/100, norte: Math.round((norte+N0)*100)/100, zona };
+}
+
+function actualizarCoordenadas(){
+  if(!estado.pos) return;
+  const {latitude:lat, longitude:lng} = estado.pos.coords;
+  const srs = document.getElementById('sel-srs').value;
+
+  if(srs === 'geo'){
+    document.getElementById('lbl-x').textContent = 'Latitud';
+    document.getElementById('lbl-y').textContent = 'Longitud';
+    document.getElementById('val-lat').textContent = lat.toFixed(7);
+    document.getElementById('val-lng').textContent = lng.toFixed(7);
+  } else {
+    const utm = geoAUtm(lat, lng);
+    document.getElementById('lbl-x').textContent = 'Este (m)';
+    document.getElementById('lbl-y').textContent = 'Norte (m)';
+    document.getElementById('val-lat').textContent = utm.este.toFixed(2);
+    document.getElementById('val-lng').textContent = utm.norte.toFixed(2);
+  }
+}
+
+// ============================================================
+// LIMPIAR DATOS LOCALES
+// ============================================================
+function limpiarDatosLocales(){
+  const pendientes = (cargarLocal('predios') || []).filter(p => !p.sincronizado).length;
+  const tracksPend = estado.tracks.filter(t => !t.sincronizado).length;
+
+  if(pendientes > 0 || tracksPend > 0){
+    if(!confirm('Tienes ' + (pendientes+tracksPend) + ' datos SIN subir a Supabase. \n\n¿Seguro que quieres borrarlos del celular?')) return;
+  }
+
+  // Limpiar todo
+  localStorage.removeItem('gps_predios');
+  localStorage.removeItem('gps_tracks');
+  localStorage.removeItem('gps_area_acreditada');
+
+  // Reiniciar estado
+  estado.tracks        = [];
+  estado.vertices      = [];
+  estado.predioActual  = null;
+  estado.areaAcreditada = null;
+
+  // Limpiar mapa completamente
+  trackLayer.setLatLngs([]);
+  if(poligonoLayer){ mapa.removeLayer(poligonoLayer); poligonoLayer = null; }
+  if(areaLayer){ mapa.removeLayer(areaLayer); areaLayer = null; }
+
+  // Reiniciar UI
+  actualizarListaVertices();
+  actualizarEstadoSync();
+  const statEl = document.getElementById('stat-areas');
+  if(statEl) statEl.textContent = 'Sin areas cargadas';
+  const logEl = document.getElementById('log-areas');
+  if(logEl) logEl.textContent = 'Areas eliminadas del mapa';
+  log('Datos locales eliminados correctamente');
+  toast('Datos locales limpiados');
+}
+
+// ============================================================
 // Recuperar tracks guardados localmente al reabrir la app
 const tracksGuardados = cargarLocal('tracks') || [];
 if(tracksGuardados.length > 0){

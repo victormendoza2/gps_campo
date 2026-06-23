@@ -110,8 +110,22 @@
   #toast{position:absolute;bottom:calc(55dvh + 12px);left:50%;transform:translateX(-50%);background:#2c2c2a;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999;white-space:nowrap;}
   #toast.show{opacity:1;}
 
-  /* Marcador GPS actual */
-  .mi-posicion{width:16px;height:16px;border-radius:50%;background:#1D9E75;border:3px solid #fff;box-shadow:0 0 0 3px rgba(29,158,117,0.3);}
+  /* Marcador GPS actual - flecha de dirección */
+  .mi-posicion-wrap{position:relative;width:32px;height:32px;}
+  .mi-posicion-flecha{
+    width:0;height:0;
+    border-left:10px solid transparent;
+    border-right:10px solid transparent;
+    border-bottom:24px solid #1D9E75;
+    filter:drop-shadow(0 0 4px rgba(29,158,117,0.6));
+    transition:transform 0.3s ease;
+    transform-origin:center center;
+  }
+  .mi-posicion-punto{
+    position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);
+    width:8px;height:8px;border-radius:50%;
+    background:#fff;border:2px solid #1D9E75;
+  }
 
   /* Controles flotantes sobre el mapa */
   .mapa-controles{position:absolute;left:10px;top:10px;z-index:1000;display:flex;flex-direction:column;gap:6px;}
@@ -273,7 +287,7 @@
     </div>
     <button class="btn-primario" onclick="descargarAreaSupabase()" style="width:100%;margin-bottom:8px;">&#8635; Actualizar desde Supabase</button>
     <button class="btn-secundario" onclick="document.getElementById('inp-kml').click()" style="width:100%;margin-bottom:8px;">&#8593; Cargar KML desde el celular</button>
-    <input type="file" id="inp-kml" accept=".kml,.kmz" style="display:none" onchange="cargarKMLLocal(this)"/>
+    <input type="file" id="inp-kml" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz,text/xml,application/xml,*/*" style="display:none" onchange="cargarKMLLocal(this)"/>
     <button class="btn-peligro" onclick="limpiarAreaMapa()" style="width:100%;margin-bottom:8px;">&#10005; Eliminar areas del mapa</button>
     <div style="font-size:11px;color:#888;padding:4px 0 8px 0;">El KML se guarda en el celular y se usa sin internet</div>
     <div id="log-areas" style="background:#fff;border:1px solid var(--borde);border-radius:8px;padding:8px;font-size:11px;color:#555;font-family:monospace;max-height:80px;overflow-y:auto;white-space:pre-wrap;">Sin actividad</div>
@@ -381,8 +395,21 @@ mapa.on('dragstart', () => {
 
 mapa.setView([-7.15, -78.51], 13); // centro inicial en Cajamarca
 
-const iconoPosicion = L.divIcon({className:'mi-posicion',iconSize:[16,16],iconAnchor:[8,8]});
+// Icono flecha de dirección
+function crearIconoFlecha(angulo){
+  return L.divIcon({
+    className: '',
+    html: `<div class="mi-posicion-wrap">
+             <div class="mi-posicion-flecha" style="transform:rotate(${angulo}deg)"></div>
+             <div class="mi-posicion-punto"></div>
+           </div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16]
+  });
+}
 let marcadorPos = null;
+let ultimoAngulo = 0;
+let ultimaPosParaAngulo = null;
 let poligonoLayer = null;
 let trackLayer = L.polyline([], {color:'#1D9E75',weight:3,opacity:.7}).addTo(mapa);
 let areaLayer = null;
@@ -407,16 +434,29 @@ const watchId = navigator.geolocation.watchPosition(
     document.getElementById('btn-vertice').disabled = false;
     document.getElementById('btn-cerrar').disabled = estado.vertices.length < 3;
 
-    // Marcador en mapa
+    // Calcular ángulo de movimiento para rotar la flecha
+    if(ultimaPosParaAngulo){
+      const dLat = lat - ultimaPosParaAngulo.lat;
+      const dLng = lng - ultimaPosParaAngulo.lng;
+      const distMov = Math.sqrt(dLat*dLat + dLng*dLng);
+      if(distMov > 0.00002){ // Solo actualizar si se movió más de ~2 metros
+        ultimoAngulo = Math.atan2(dLng, dLat) * 180 / Math.PI;
+        ultimaPosParaAngulo = {lat, lng};
+      }
+    } else {
+      ultimaPosParaAngulo = {lat, lng};
+    }
+
+    // Marcador en mapa con flecha rotada
+    const iconoFlecha = crearIconoFlecha(ultimoAngulo);
     if(!marcadorPos){
-      marcadorPos = L.marker([lat,lng],{icon:iconoPosicion}).addTo(mapa);
-      // Primera posición: centrar siempre
+      marcadorPos = L.marker([lat,lng], {icon: iconoFlecha}).addTo(mapa);
       mapa.setView([lat,lng], 17, {animate:true});
       siguiendo = true;
       document.getElementById('btn-localizar').classList.add('siguiendo');
     } else {
       marcadorPos.setLatLng([lat,lng]);
-      // Solo seguir si está activo
+      marcadorPos.setIcon(iconoFlecha);
       if(siguiendo) mapa.setView([lat,lng]);
     }
 
